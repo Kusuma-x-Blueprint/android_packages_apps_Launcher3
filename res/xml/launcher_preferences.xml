@@ -110,4 +110,11 @@
         android:defaultValue="true"
         android:persistent="true" />
 
+    <SwitchPreferenceCompat
+        android:key="status_bar_clock_auto_hide"
+        android:title="@string/status_bar_clock_auto_hide_title"
+        android:summary="@string/status_bar_clock_auto_hide_summary"
+        android:defaultValue="false"
+        android:persistent="false" />
+
 </androidx.preference.PreferenceScreen>

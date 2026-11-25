@@ -26,12 +26,15 @@ import static com.android.launcher3.BuildConfig.IS_STUDIO_BUILD;
 import static com.android.launcher3.InvariantDeviceProfile.TYPE_MULTI_DISPLAY;
 import static com.android.launcher3.InvariantDeviceProfile.TYPE_TABLET;
 import static com.android.launcher3.states.RotationHelper.ALLOW_ROTATION_PREFERENCE_KEY;
+import static com.android.launcher3.util.Executors.MAIN_EXECUTOR;
 
 import android.app.Activity;
+import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.LauncherApps;
 import android.content.res.Resources;
+import android.database.ContentObserver;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.Settings;
@@ -53,6 +56,7 @@ import androidx.preference.PreferenceFragmentCompat.OnPreferenceStartScreenCallb
 import androidx.preference.PreferenceGroup;
 import androidx.preference.PreferenceGroup.PreferencePositionCallback;
 import androidx.preference.PreferenceScreen;
+import androidx.preference.SwitchPreferenceCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.android.launcher3.BuildConfig;
@@ -67,6 +71,8 @@ import com.android.launcher3.util.DisplayController;
 import com.android.launcher3.util.SettingsCache;
 import com.android.settingslib.widget.SettingsBasePreferenceFragment;
 import com.android.settingslib.widget.SettingsThemeHelper;
+
+import lineageos.providers.LineageSettings;
 
 /**
  * Settings activity for Launcher. Currently implements the following setting: Allow rotation
@@ -97,6 +103,9 @@ public class SettingsActivity extends FragmentActivity
 
     private static final String KEY_SUGGESTIONS = "pref_suggestions";
     private static final String SUGGESTIONS_PACKAGE = "com.google.android.as";
+
+    private static final String ICON_BLACKLIST = "icon_blacklist";
+    private static final String CLOCK_ICON = "clock";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -201,6 +210,16 @@ public class SettingsActivity extends FragmentActivity
 
         private boolean mPreferenceHighlighted = false;
 
+        private SwitchPreferenceCompat mClockAutoHidePref;
+
+        private final ContentObserver mClockObserver =
+                new ContentObserver(MAIN_EXECUTOR.getHandler()) {
+            @Override
+            public void onChange(boolean selfChange) {
+                updateClockAutoHideState();
+            }
+        };
+
         @Override
         public void onCreate(@Nullable Bundle savedInstanceState) {
             if (BuildConfig.IS_DEBUG_DEVICE) {
@@ -210,6 +229,16 @@ public class SettingsActivity extends FragmentActivity
                 settingsCache.register(devUri, this);
             }
             super.onCreate(savedInstanceState);
+            if (mClockAutoHidePref != null) {
+                final ContentResolver resolver = getContext().getContentResolver();
+                resolver.registerContentObserver(
+                        LineageSettings.System.getUriFor(
+                                LineageSettings.System.STATUS_BAR_CLOCK_AUTO_HIDE),
+                        false, mClockObserver);
+                resolver.registerContentObserver(
+                        Settings.Secure.getUriFor(ICON_BLACKLIST),
+                        false, mClockObserver);
+            }
         }
 
         @Override
@@ -376,13 +405,41 @@ public class SettingsActivity extends FragmentActivity
                 case KEY_SUGGESTIONS:
                     return launcherApps != null &&
                             launcherApps.isPackageEnabled(SUGGESTIONS_PACKAGE, myUserHandle());
+                case LineageSettings.System.STATUS_BAR_CLOCK_AUTO_HIDE:
+                    if (preference instanceof SwitchPreferenceCompat) {
+                        mClockAutoHidePref = (SwitchPreferenceCompat) preference;
+                        mClockAutoHidePref.setOnPreferenceChangeListener((pref, newValue) -> {
+                            LineageSettings.System.putInt(getContext().getContentResolver(),
+                                    LineageSettings.System.STATUS_BAR_CLOCK_AUTO_HIDE,
+                                    (boolean) newValue ? 1 : 0);
+                            return true;
+                        });
+                        updateClockAutoHideState();
+                    }
+                    return true;
             }
             return true;
+        }
+
+        private void updateClockAutoHideState() {
+            if (mClockAutoHidePref == null || getContext() == null) {
+                return;
+            }
+            final ContentResolver resolver = getContext().getContentResolver();
+            final String curIconBlacklist = Settings.Secure.getString(resolver, ICON_BLACKLIST);
+            final boolean isClockBlacklisted = TextUtils.delimitedStringContains(
+                    curIconBlacklist, ',', CLOCK_ICON);
+            mClockAutoHidePref.setVisible(!isClockBlacklisted);
+
+            final boolean autoHide = LineageSettings.System.getInt(
+                    resolver, LineageSettings.System.STATUS_BAR_CLOCK_AUTO_HIDE, 0) != 0;
+            mClockAutoHidePref.setChecked(autoHide);
         }
 
         @Override
         public void onResume() {
             super.onResume();
+            updateClockAutoHideState();
 
             if (isAdded() && !mPreferenceHighlighted) {
                 PreferenceHighlighter highlighter = createHighlighter();
@@ -406,6 +463,9 @@ public class SettingsActivity extends FragmentActivity
         @Override
         public void onDestroy() {
             super.onDestroy();
+            if (mClockAutoHidePref != null) {
+                getContext().getContentResolver().unregisterContentObserver(mClockObserver);
+            }
             if (IS_DEBUG_DEVICE) {
                 SettingsCache.INSTANCE.get(getContext())
                         .unregister(Settings.Global.getUriFor(DEVELOPMENT_SETTINGS_ENABLED), this);
